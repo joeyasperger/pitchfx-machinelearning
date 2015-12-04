@@ -104,114 +104,66 @@ def getFeaturesCH(pitch):
     return feature_vec
 
 
-def train(regressors, scaler, classifications, reg):
+def train(reg, scaler, batters):
     client = MongoClient('localhost', 27017)
     db = client["pitchfx"]
-    xVals = {
-        'highVol': [],
-        'balanced': [],
-        'defensive': [],
-        'inPlay': []
-    }
-    yVals = {
-        'highVol': [],
-        'balanced': [],
-        'defensive': [],
-        'inPlay': []
-    }
     x = []
     y = []
-    for pitch in db.pitches.find({"pitch_type":"CH", "year":2014}, limit=50000):
-        feature_vec = getFeaturesCH(pitch)
+    num_added = 0
+    for pitch in db.pitches.find({"pitch_type":"FF", "batter":{"$in": batters}}, limit=10000):
+        feature_vec = getFeaturesFF(pitch)
         if pitch["type"] == 'S':
             result = 1
         if pitch["type"] == 'B':
             continue
         if pitch["type"] == 'X':
             result = events[pitch["event"]]
-        if pitch['batter'] in classifications['highVol']:
-            xVals['highVol'].append(feature_vec)
-            yVals['highVol'].append(result)
-            x.append(feature_vec)
-            y.append(result)
-        elif pitch['batter'] in classifications['balanced']:
-            xVals['balanced'].append(feature_vec)
-            yVals['balanced'].append(result)
-            x.append(feature_vec)
-            y.append(result)
-        elif pitch['batter'] in classifications['defensive']:
-            xVals['defensive'].append(feature_vec)
-            yVals['defensive'].append(result)
-            x.append(feature_vec)
-            y.append(result)
-        elif pitch['batter'] in classifications['inPlay']:
-            xVals['inPlay'].append(feature_vec)
-            yVals['inPlay'].append(result)
-            x.append(feature_vec)
-            y.append(result)
-
-    print len(y), ' pitches added'
+        x.append(feature_vec)
+        y.append(result)
+        num_added += 1
+    print num_added, ' pitches added'
     scaler.fit(x)
     reg.fit(scaler.transform(x),y)
-    regressors['highVol'].fit(scaler.transform(xVals['highVol']),yVals['highVol'])
-    regressors['balanced'].fit(scaler.transform(xVals['balanced']),yVals['balanced'])
-    regressors['defensive'].fit(scaler.transform(xVals['defensive']),yVals['defensive'])
-    regressors['inPlay'].fit(scaler.transform(xVals['inPlay']),yVals['inPlay'])
 
-
-def test(regressors, scaler, classifications, reg):
+def testTrain(reg, scaler, batters):
     client = MongoClient('localhost', 27017)
     db = client["pitchfx"]
     num_added = 0
     total_error = 0
-    total_errors = {
-        'highVol': 0,
-        'balanced': 0,
-        'defensive': 0,
-        'inPlay': 0
-    }
-    num_addeds = {
-        'highVol': 0,
-        'balanced': 0,
-        'defensive': 0,
-        'inPlay': 0
-    }
-    for pitch in db.pitches.find({"pitch_type":"CH", "year":2014}, limit=50000, skip=50000):
-        feature_vec = getFeaturesCH(pitch)
+    for pitch in db.pitches.find({"pitch_type":"FF", "batter":{"$in": batters}}, limit=10000):
+        feature_vec = getFeaturesFF(pitch)
         if pitch["type"] == 'S':
             result = 1
         if pitch["type"] == 'B':
             continue
         if pitch["type"] == 'X':
             result = events[pitch["event"]]
-        if pitch['batter'] in classifications['highVol']:
-            total_errors['highVol'] += abs(regressors['highVol'].predict(scaler.transform([feature_vec]))[0] - result)
-            num_addeds['highVol'] += 1
-        elif pitch['batter'] in classifications['balanced']:
-            total_errors['balanced'] += abs(regressors['balanced'].predict(scaler.transform([feature_vec]))[0] - result)
-            num_addeds['balanced'] += 1
-        elif pitch['batter'] in classifications['defensive']:
-            total_errors['defensive'] += abs(regressors['defensive'].predict(scaler.transform([feature_vec]))[0] - result)
-            num_addeds['defensive'] += 1
-        elif pitch['batter'] in classifications['inPlay']:
-            total_errors['inPlay'] += abs(regressors['inPlay'].predict(scaler.transform([feature_vec]))[0] - result)
-            num_addeds['inPlay'] += 1
-        else:
-            continue
-            
         error = reg.predict(scaler.transform([feature_vec]))[0] - result
         #print 'prediction: ', reg.predict(scaler.transform([feature_vec]))[0], ' result: ', result 
         num_added += 1
         total_error += abs(error)
     print num_added, ' pitches tested'
-    print 'Old method: Error = ', total_error, ' error per pitch = ', total_error/float(num_added)
-    total_error_class = 0
-    num_added_class = 0
-    for key in ['highVol', 'balanced', 'defensive', 'inPlay']:
-        print key +': Error = ', total_errors[key], ' error per pitch = ', total_errors[key]/float(num_addeds[key])
-        total_error_class += total_errors[key]
-        num_added_class += num_addeds[key]
-    print 'Total with classifications: Error = ', total_error_class, ' error per pitch = ', total_error_class/float(num_added_class)
+    print 'Train Error = ', total_error, ' error per pitch = ', total_error/float(num_added)
+
+def test(reg, scaler, batters):
+    client = MongoClient('localhost', 27017)
+    db = client["pitchfx"]
+    num_added = 0
+    total_error = 0
+    for pitch in db.pitches.find({"pitch_type":"FF", "batter":{"$in": batters}}, limit=10000, skip=10000):
+        feature_vec = getFeaturesFF(pitch)
+        if pitch["type"] == 'S':
+            result = 1
+        if pitch["type"] == 'B':
+            continue
+        if pitch["type"] == 'X':
+            result = events[pitch["event"]]
+        error = reg.predict(scaler.transform([feature_vec]))[0] - result
+        #print 'prediction: ', reg.predict(scaler.transform([feature_vec]))[0], ' result: ', result 
+        num_added += 1
+        total_error += abs(error)
+    print num_added, ' pitches tested'
+    print 'Error = ', total_error, ' error per pitch = ', total_error/float(num_added)
 
 def kmeans_features(player):
     features = []
@@ -302,14 +254,23 @@ db = client["pitchfx"]
 num_clusters = 8
 (kmeans, scaler) = classifyWithKmeans(8)
 data = []
+regs = []
+scalers = []
 for i in range(num_clusters):
     data.append([])
+    regs.append(SGDRegressor(loss='squared_loss', n_iter=5))
+    scalers.append(StandardScaler())
 for player in db.players.find():
     if player.get('h_2014') == None or player.get('h_2014') < 100:
         continue
     cluster = kmeans.predict(scaler.transform([kmeans_features(player)]))[0]
-    data[cluster].append(player)
-print data
+    data[cluster].append(player["player_id"])
+for i in range(num_clusters):
+    train(regs[i], scalers[i], data[i])
+    testTrain(regs[i], scalers[i], data[i])
+    test(regs[i], scalers[i], data[i])
+
+
 
 
 
