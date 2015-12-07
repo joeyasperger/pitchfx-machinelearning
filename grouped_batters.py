@@ -1,4 +1,5 @@
 import numpy as np
+import json
 from sklearn.linear_model import SGDRegressor
 from sklearn.preprocessing import StandardScaler
 from sklearn.naive_bayes import GaussianNB
@@ -6,6 +7,9 @@ from sklearn.cluster import KMeans
 from sklearn import svm
 from pymongo import MongoClient
 from bson.objectid import ObjectId
+from collections import Counter
+from sklearn.feature_extraction import DictVectorizer
+
 
 events =  {
     'Strikeout': 1,
@@ -49,69 +53,149 @@ events =  {
     'Sacrifice Bunt DP': 0
 }
 
-def getFeaturesFF(pitch):
+def getFeatures(pitch):
+    features = {}
     feature_vec = []
-    feature_vec.append(pitch["start_speed"])
-    feature_vec.append(pitch["px"] ** 2)
-    if pitch["batter_hand"] == 'R':
-        feature_vec.append(pitch["px"])
+    features["start_speed"] = pitch["start_speed"]
+    features["start_speed^2"] = pitch["start_speed"] ** 2
+    features["px^2"] = pitch["px"] ** 2
+    if pitch["px"] == 'R':
+        features["px"] = pitch["px"]
     else:
-        feature_vec.append(-pitch["px"])
-    feature_vec.append((pitch["pz"] - (pitch["sz_top"] - pitch["sz_top"])) ** 2)
-    feature_vec.append(pitch["pz"] - (pitch["sz_top"] - pitch["sz_top"]))
-    feature_vec.append(pitch["pfx_x"] ** 2)
-    feature_vec.append(pitch["pfx_x"])
-    feature_vec.append(pitch["pfx_z"] ** 2)
-    feature_vec.append(pitch["pfx_z"])
-    return feature_vec
+        features["px"] = -pitch["px"]
+    features["pfx_x^2"] = pitch["pfx_x"] ** 2
+    features["pfx_x"] = pitch["pfx_x"]
+    features["pfx_z^2"] = pitch["pfx_z"] ** 2
+    features["pfx_z"] = pitch["pfx_z"]
+    features["pz-mid"] = pitch["pz"] - (pitch["sz_top"] + pitch["sz_bot"])/2
+    features["pz-mid^2"] = (pitch["pz"] - (pitch["sz_top"] + pitch["sz_bot"])/2) ** 2
+    features["break_angle"] = pitch["break_angle"]
+    features["break_length"] = pitch["break_length"]
+    features["break_y"] = pitch["break_y"]
+    features["px*pz-mid"] = features["px"] * features["pz-mid"]
+    features["px^2*(pz-mid)^2"] = (features["px"] ** 2) * (features["pz-mid"] ** 2)
+    features["1"] = 1
 
-def getFeaturesCU(pitch):
-    feature_vec = []
-    feature_vec.append(pitch["start_speed"]) # positive
-    feature_vec.append(pitch["px"] ** 2) # 
-    if pitch["batter_hand"] == 'R':
-        feature_vec.append(pitch["px"])
+    if pitch["pitch_type"] == "FF":
+        features["FF"] = 1
     else:
-        feature_vec.append(-pitch["px"])
-    feature_vec.append((pitch["pz"] - (pitch["sz_top"] - pitch["sz_top"])) ** 2) # matters a lot
-    feature_vec.append(pitch["pz"] - (pitch["sz_top"] - pitch["sz_top"])) #lower is better, really negative weight
-    feature_vec.append(pitch["pfx_x"] ** 2)
-    feature_vec.append(pitch["pfx_x"])
-    feature_vec.append(pitch["pfx_z"] ** 2)
-    feature_vec.append(pitch["pfx_z"])
-    feature_vec.append(pitch["break_angle"])
-    feature_vec.append(pitch["break_length"])
-    feature_vec.append(pitch["break_y"])
-    return feature_vec
-
-def getFeaturesCH(pitch):
-    feature_vec = []
-    feature_vec.append(pitch["start_speed"]) # positive
-    feature_vec.append(pitch["px"] ** 2) # 
-    if pitch["batter_hand"] == 'R':
-        feature_vec.append(pitch["px"])
+        features["FF"] = 0
+    if pitch["pitch_type"] == "CU":
+        features["CU"] = 1
     else:
-        feature_vec.append(-pitch["px"])
-    feature_vec.append((pitch["pz"] - (pitch["sz_top"] - pitch["sz_top"])) ** 2) # matters a lot
-    feature_vec.append(pitch["pz"] - (pitch["sz_top"] - pitch["sz_top"])) #lower is better, really negative weight
-    feature_vec.append(pitch["pfx_x"] ** 2)
-    feature_vec.append(pitch["pfx_x"])
-    feature_vec.append(pitch["pfx_z"] ** 2)
-    feature_vec.append(pitch["pfx_z"])
-    feature_vec.append(pitch["break_angle"])
-    feature_vec.append(pitch["break_length"])
-    feature_vec.append(pitch["break_y"])
-    return feature_vec
+        features["CU"] = 0
+    if pitch["pitch_type"] == "CH":
+        features["CH"] = 1
+    else:
+        features["CH"] = 0
+    if pitch["prev_type"] == "FF":
+        features["prev_FF"] = 1
+    else:
+        features["prev_FF"] = 0
+    if pitch["prev_type"] == "CU":
+        features["prev_CU"] = 1
+    else:
+        features["prev_CU"] = 0
+    if pitch["prev_type"] == "CH":
+        features["prev_CH"] = 1
+    else:
+        features["prev_CH"] = 0
+
+    attribs = ["start_speed", "start_speed^2", "px^2", "px", "pfx_x^2", "pfx_x", 
+        "pfx_z^2", "pfx_z", "pz-mid", "pz-mid^2", "break_angle", "break_length", "break_y",
+        "px*pz-mid", "px^2*(pz-mid)^2"]
+    for attrib in attribs:
+        for pitch_type in ["prev_FF", "prev_CU", "prev_CH", "FF", "CU", "CH"]:
+            features[pitch_type + "_" + attrib] = features[pitch_type] * features[attrib]
+
+    zones = ['TL', 'TM', 'TR', 'ML', 'MM', 'MR', 'BL', 'BM', 'BR']
+    for zone in zones:
+        features['zone_' + zone] = 0
+        features['prev_zone_' + zone] = 0
+    current_zone = getZone(pitch['px'], pitch['pz'], pitch['sz_top'], pitch['sz_bot'])
+    features['zone_' + current_zone] = 1
+    if pitch['prev_px'] != None:
+        prev_zone = getZone(pitch['prev_px'], pitch['prev_pz'], pitch['sz_top'], pitch['sz_bot'])
+        features['prev_zone_' + prev_zone] = 1
+    for zone1 in zones:
+        for zone2 in zones:
+            features[zone1 + '*prev=' + zone2] = features['zone_' + zone1] * features['prev_zone_' + zone2]
+    return features
+
+def getZone(px, pz, sz_top, sz_bot):
+    if pz - sz_bot < (sz_top - sz_bot)/3.0:
+        # lower third
+        if px < -0.236:
+            return 'TL'
+        if px < 0.236:
+            return 'TM'
+        else:
+            return 'TR'
+    elif pz - sz_bot < (sz_top - sz_bot)/3.0 * 2:
+        #middle third
+        if px < -0.236:
+            return 'ML'
+        if px < 0.236:
+            return 'MM'
+        else:
+            return 'MR'
+    else:
+        #top third
+        if px < -0.236:
+            return 'BL'
+        if px < 0.2363:
+            return 'BM'
+        else:
+            return 'BR'
+
+# def getFeaturesCU(pitch):
+#     feature_vec = []
+#     feature_vec.append(pitch["start_speed"]) # positive
+#     feature_vec.append(pitch["px"] ** 2) # 
+#     if pitch["batter_hand"] == 'R':
+#         feature_vec.append(pitch["px"])
+#     else:
+#         feature_vec.append(-pitch["px"])
+#     feature_vec.append((pitch["pz"] - (pitch["sz_top"] - pitch["sz_top"])) ** 2) # matters a lot
+#     feature_vec.append(pitch["pz"] - (pitch["sz_top"] - pitch["sz_top"])) #lower is better, really negative weight
+#     feature_vec.append(pitch["pfx_x"] ** 2)
+#     feature_vec.append(pitch["pfx_x"])
+#     feature_vec.append(pitch["pfx_z"] ** 2)
+#     feature_vec.append(pitch["pfx_z"])
+#     feature_vec.append(pitch["break_angle"])
+#     feature_vec.append(pitch["break_length"])
+#     feature_vec.append(pitch["break_y"])
+#     return feature_vec
+
+# def getFeaturesCH(pitch):
+#     feature_vec = []
+#     feature_vec.append(pitch["start_speed"]) # positive
+#     feature_vec.append(pitch["px"] ** 2) # 
+#     if pitch["batter_hand"] == 'R':
+#         feature_vec.append(pitch["px"])
+#     else:
+#         feature_vec.append(-pitch["px"])
+#     feature_vec.append((pitch["pz"] - (pitch["sz_top"] - pitch["sz_top"])) ** 2) # matters a lot
+#     feature_vec.append(pitch["pz"] - (pitch["sz_top"] - pitch["sz_top"])) #lower is better, really negative weight
+#     feature_vec.append(pitch["pfx_x"] ** 2)
+#     feature_vec.append(pitch["pfx_x"])
+#     feature_vec.append(pitch["pfx_z"] ** 2)
+#     feature_vec.append(pitch["pfx_z"])
+#     feature_vec.append(pitch["break_angle"])
+#     feature_vec.append(pitch["break_length"])
+#     feature_vec.append(pitch["break_y"])
+#     return feature_vec
 
 
-def train(reg, scaler, batters):
+def train(reg, scaler, batters, num_pitches, vec):
     client = MongoClient('localhost', 27017)
     db = client["pitchfx"]
     x = []
     y = []
     num_added = 0
-    for pitch in db.pitches.find({"pitch_type":"FF", "batter":{"$in": batters}}, limit=10000):
-        feature_vec = getFeaturesFF(pitch)
+    # for pitch in db.pitches.find({"pitch_type":"FF", "batter":{"$in": batters}}, limit=100000):
+    for pitch in db.pitches.find({"pitch_type":{"$in": ["FF", "CH", "CU"]}}, limit=num_pitches):
+        feature_vec = getFeatures(pitch)
         if pitch["type"] == 'S':
             result = 1
         if pitch["type"] == 'B':
@@ -122,48 +206,69 @@ def train(reg, scaler, batters):
         y.append(result)
         num_added += 1
     print num_added, ' pitches added'
-    scaler.fit(x)
-    reg.fit(scaler.transform(x),y)
+    scaler.fit(vec.fit_transform(x).toarray())
+    reg.fit(scaler.transform(vec.transform(x).toarray()),y)
+    print 'finished fitting data'
 
-def testTrain(reg, scaler, batters):
+def testTrain(reg, scaler, batters, num_pitches, vec):
     client = MongoClient('localhost', 27017)
     db = client["pitchfx"]
     num_added = 0
     total_error = 0
-    for pitch in db.pitches.find({"pitch_type":"FF", "batter":{"$in": batters}}, limit=10000):
-        feature_vec = getFeaturesFF(pitch)
+    total_error_sq = 0
+    total_maj_err = 0
+    total_maj_err_sq = 0
+    # for pitch in db.pitches.find({"pitch_type":"FF", "batter":{"$in": batters}}, limit=100000):
+    for pitch in db.pitches.find({"pitch_type":{"$in": ["FF", "CH", "CU"]}}, limit=num_pitches):
+
+        feature_vec = getFeatures(pitch)
         if pitch["type"] == 'S':
             result = 1
         if pitch["type"] == 'B':
             continue
         if pitch["type"] == 'X':
             result = events[pitch["event"]]
-        error = reg.predict(scaler.transform([feature_vec]))[0] - result
+        #print reg.predict(scaler.transform(vec.transform(feature_vec).toarray()))[0]
+        error = reg.predict(scaler.transform(vec.transform(feature_vec).toarray()))[0] - result
         #print 'prediction: ', reg.predict(scaler.transform([feature_vec]))[0], ' result: ', result 
-        num_added += 1
+        num_added += 1    
         total_error += abs(error)
+        total_error_sq += error ** 2
+        majority_error = 1-result
+        total_maj_err += abs(majority_error)
+        total_maj_err_sq += majority_error ** 2
     print num_added, ' pitches tested'
-    print 'Train Error = ', total_error, ' error per pitch = ', total_error/float(num_added)
+    print 'Train Error = ', total_error, ' error per pitch = ', total_error/float(num_added), 'squared error =', total_error_sq/float(num_added)
+    print 'Train Error (majority algorithm) = ', total_maj_err, ' error per pitch = ', total_maj_err/float(num_added), 'squared error =', total_maj_err_sq/float(num_added)
 
-def test(reg, scaler, batters):
+def test(reg, scaler, batters, num_pitches, vec):
     client = MongoClient('localhost', 27017)
     db = client["pitchfx"]
     num_added = 0
     total_error = 0
-    for pitch in db.pitches.find({"pitch_type":"FF", "batter":{"$in": batters}}, limit=10000, skip=10000):
-        feature_vec = getFeaturesFF(pitch)
+    total_error_sq = 0
+    total_maj_err = 0
+    total_maj_err_sq = 0
+    # for pitch in db.pitches.find({"pitch_type":"FF", "batter":{"$in": batters}}, limit=100000, skip=100000):
+    for pitch in db.pitches.find({"pitch_type":{"$in": ["FF", "CH", "CU"]}}, limit=100000, skip=num_pitches):
+        feature_vec = getFeatures(pitch)
         if pitch["type"] == 'S':
             result = 1
         if pitch["type"] == 'B':
             continue
         if pitch["type"] == 'X':
             result = events[pitch["event"]]
-        error = reg.predict(scaler.transform([feature_vec]))[0] - result
+        error = reg.predict(scaler.transform(vec.transform(feature_vec).toarray()))[0] - result
         #print 'prediction: ', reg.predict(scaler.transform([feature_vec]))[0], ' result: ', result 
         num_added += 1
         total_error += abs(error)
+        total_error_sq += error ** 2
+        majority_error = 1-result
+        total_maj_err += abs(majority_error)
+        total_maj_err_sq += majority_error ** 2
     print num_added, ' pitches tested'
-    print 'Error = ', total_error, ' error per pitch = ', total_error/float(num_added)
+    print 'Error = ', total_error, ' error per pitch = ', total_error/float(num_added), 'squared error =', total_error_sq/float(num_added)
+    print 'Train Error (majority algorithm) = ', total_maj_err, ' error per pitch = ', total_maj_err/float(num_added), 'squared error =', total_maj_err_sq/float(num_added)
 
 def kmeans_features(player):
     features = []
@@ -248,35 +353,39 @@ def classifyGeneralPlayer(player):
 # train(regressors, scaler, classifications, reg)
 # test(regressors, scaler, classifications, reg)
 
+vec = DictVectorizer()
+scaler = StandardScaler()
+num_iters = 100
+reg = SGDRegressor(loss='squared_loss', n_iter=num_iters, verbose=2, penalty='l2', alpha= 0.001, learning_rate="invscaling", eta0=0.002, power_t=0.4)
+num_pitches = 100000
+print num_pitches, 'pitches'
+print 'training with num iters = ', num_iters
+train(reg, scaler, None, num_pitches, vec)
+print reg.coef_
+print json.dumps(vec.inverse_transform([reg.coef_]), sort_keys=True, indent=4)
+testTrain(reg, scaler, None, num_pitches, vec)
+test(reg, scaler, None, num_pitches, vec)
 
-client = MongoClient('localhost', 27017)
-db = client["pitchfx"]
-num_clusters = 8
-(kmeans, scaler) = classifyWithKmeans(8)
-data = []
-regs = []
-scalers = []
-for i in range(num_clusters):
-    data.append([])
-    regs.append(SGDRegressor(loss='squared_loss', n_iter=5))
-    scalers.append(StandardScaler())
-for player in db.players.find():
-    if player.get('h_2014') == None or player.get('h_2014') < 100:
-        continue
-    cluster = kmeans.predict(scaler.transform([kmeans_features(player)]))[0]
-    data[cluster].append(player["player_id"])
-for i in range(num_clusters):
-    train(regs[i], scalers[i], data[i])
-    testTrain(regs[i], scalers[i], data[i])
-    test(regs[i], scalers[i], data[i])
-
-
-
-
-
-
-
-
-
+# client = MongoClient('localhost', 27017)
+# db = client["pitchfx"]
+# num_clusters = 8
+# (kmeans, scaler) = classifyWithKmeans(8)
+# data = []
+# regs = []
+# scalers = []
+# for i in range(num_clusters):
+#     data.append([])
+#     regs.append(SGDRegressor(loss='squared_loss', n_iter=5))
+#     scalers.append(StandardScaler())
+# for player in db.players.find():
+#     if player.get('h_2014') == None or player.get('h_2014') < 100:
+#         continue
+#     cluster = kmeans.predict(scaler.transform([kmeans_features(player)]))[0]
+#     data[cluster].append(player["player_id"])
+# print "1111111"
+# for i in range(num_clusters):
+#     train(regs[i], scalers[i], data[i])
+#     testTrain(regs[i], scalers[i], data[i])
+#     test(regs[i], scalers[i], data[i])
 
 
