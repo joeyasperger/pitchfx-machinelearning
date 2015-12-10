@@ -9,6 +9,8 @@ from pymongo import MongoClient
 from bson.objectid import ObjectId
 from collections import Counter
 from sklearn.feature_extraction import DictVectorizer
+import matplotlib.pyplot as plt
+import pickle
 
 
 events =  {
@@ -287,15 +289,25 @@ client = MongoClient('localhost', 27017)
 db = client["pitchfx"]
 (kmeans, kmeans_scaler, kmeans_vec) = classifyWithKmeans(8)
 players = {}
+x = []
+y = []
+colors = []
 for player in db.players.find():
     for year in range(2008, 2016):
         if player.get('h_%d' % year) == None or player.get('ab_%d' % year) < 100:
             continue
         players[(player["player_id"], year)] = kmeans.predict(kmeans_scaler.transform(kmeans_vec.transform(kmeans_features(player, year)).toarray()))[0]
+        x.append(player["avg_%d" % year])
+        y.append(player["hr_%d" % year])
+        colors.append(players[(player["player_id"], year)])
+# plt.scatter(x, y, c=colors, alpha=0.5)
+# plt.ylabel('Home Runs')
+# plt.xlabel('Batting Average')
+# plt.show()
 print 'finished mapping players'
 vec = DictVectorizer()
 scaler = StandardScaler()
-num_iters = 100
+num_iters = 200
 reg = SGDRegressor(loss='squared_loss', n_iter=num_iters, verbose=2, penalty='l2', alpha= 0.001, learning_rate="invscaling", eta0=0.002, power_t=0.4)
 num_pitches = 200000
 print num_pitches, 'pitches'
@@ -306,6 +318,7 @@ print json.dumps(vec.inverse_transform([reg.coef_]), sort_keys=True, indent=4)
 print len(list(reg.coef_)), "total features"
 testTrain(reg, scaler, num_pitches, vec, players)
 test(reg, scaler, num_pitches, vec, players)
+
 
 # === KERSHAW STUFF ===
 
@@ -357,105 +370,168 @@ for ptype in ["FF", "SL", "CU"]:
 
 print json.dumps(avgs, indent=4)
 
+saves = {
+    'reg': reg,
+    'scaler': scaler,
+    'vec': vec,
+    'avgs': avg
+}
+
+pickle.dump(saves, open('saves.p', 'wb'))
+
 # == test ==
 
-prev_zone = 'BR'
-prev_type = 'FF'
-print '--------'
-print 'Previous pitch:', prev_type, prev_zone
-for pitch_type in ["FF", "SL", "CU"]:
-    for zone in ['TL', 'TM', 'TR', 'ML', 'MM', 'MR', 'BL', 'BM', 'BR']:
-        (px, pz) = getLocation(zone)
-        pitch['pitch_type'] = pitch_type
-        pitch['px'] = px
-        pitch['pz'] = pz
-        for attrib in attribs:
-            pitch[attrib] = avgs[pitch_type][attrib]
-        pitch['prev_type'] = 'FF'
-        (prev_px, prev_pz) = getLocation(prev_zone)
-        pitch['prev_px'] = prev_px
-        pitch['prev_pz'] = prev_pz
-        prediction = reg.predict(scaler.transform(vec.transform(getFeatures(pitch, 6)).toarray()))[0]
-        print pitch_type, zone, ':', prediction
+def color(num):
+    val = (num - .45) * 4
+    return [min(.8, 1-val), 0, val]
 
-prev_zone = 'TL'
-prev_type = 'FF'
-print '--------'
-print 'Previous pitch:', prev_type, prev_zone
-for pitch_type in ["FF", "SL", "CU"]:
-    for zone in ['TL', 'TM', 'TR', 'ML', 'MM', 'MR', 'BL', 'BM', 'BR']:
-        (px, pz) = getLocation(zone)
-        pitch['pitch_type'] = pitch_type
-        pitch['px'] = px
-        pitch['pz'] = pz
-        for attrib in attribs:
-            pitch[attrib] = avgs[pitch_type][attrib]
-        pitch['prev_type'] = 'FF'
-        (prev_px, prev_pz) = getLocation(prev_zone)
-        pitch['prev_px'] = prev_px
-        pitch['prev_pz'] = prev_pz
-        prediction = reg.predict(scaler.transform(vec.transform(getFeatures(pitch, 6)).toarray()))[0]
-        print pitch_type, zone, ':', prediction
+def plotpitches(prev_type, prev_zone, cluster, reg, scaler, vec):
+    attribs = ["start_speed", "pfx_x", "pfx_z", "break_angle", "break_length", "break_y"]
+    print '--------'
+    print 'Previous pitch:', prev_type, prev_zone
+    grids = []
+    for pitch_type in ["FF", "SL", "CU"]:
+        grid = []
+        for ypos in ['T', 'M', 'B']:
+            row = []
+            for xpos in ['L', 'M', 'R']:
+                zone = ypos + xpos
+                (px, pz) = getLocation(zone)
+                pitch['pitch_type'] = pitch_type
+                pitch['px'] = px
+                pitch['pz'] = pz
+                for attrib in attribs:
+                    pitch[attrib] = avgs[pitch_type][attrib]
+                pitch['prev_type'] = 'FF'
+                (prev_px, prev_pz) = getLocation(prev_zone)
+                pitch['prev_px'] = prev_px
+                pitch['prev_pz'] = prev_pz
+                prediction = reg.predict(scaler.transform(vec.transform(getFeatures(pitch, cluster)).toarray()))[0]
+                row.append(color(prediction))
+                print pitch_type, zone, ':', prediction
+            grid.append(row)
+        grids.append(grid)
+    fig, axes = plt.subplots(1, 3, figsize=(8, 6),
+                         subplot_kw={'xticks': [], 'yticks': []})
 
+    fig.subplots_adjust(hspace=0.3, wspace=0.05)
 
-prev_zone = 'BL'
-prev_type = 'CU'
-print '--------'
-print 'Previous pitch:', prev_type, prev_zone
-for pitch_type in ["FF", "SL", "CU"]:
-    for zone in ['TL', 'TM', 'TR', 'ML', 'MM', 'MR', 'BL', 'BM', 'BR']:
-        (px, pz) = getLocation(zone)
-        pitch['pitch_type'] = pitch_type
-        pitch['px'] = px
-        pitch['pz'] = pz
-        for attrib in attribs:
-            pitch[attrib] = avgs[pitch_type][attrib]
-        pitch['prev_type'] = 'FF'
-        (prev_px, prev_pz) = getLocation(prev_zone)
-        pitch['prev_px'] = prev_px
-        pitch['prev_pz'] = prev_pz
-        prediction = reg.predict(scaler.transform(vec.transform(getFeatures(pitch, 6)).toarray()))[0]
-        print pitch_type, zone, ':', prediction
+    axes.flat[0].imshow(grid, interpolation='none')
+    axes.flat[0].set_title("Fastball")
+    axes.flat[1].imshow(grid, interpolation='none')
+    axes.flat[1].set_title("Slider")
+    axes.flat[2].imshow(grid, interpolation='none')
+    axes.flat[2].set_title("Curveball")
+
+    plt.plot()
 
 
-prev_zone = 'BR'
-prev_type = 'SL'
-print '--------'
-print 'Previous pitch:', prev_type, prev_zone
-for pitch_type in ["FF", "SL", "CU"]:
-    for zone in ['TL', 'TM', 'TR', 'ML', 'MM', 'MR', 'BL', 'BM', 'BR']:
-        (px, pz) = getLocation(zone)
-        pitch['pitch_type'] = pitch_type
-        pitch['px'] = px
-        pitch['pz'] = pz
-        for attrib in attribs:
-            pitch[attrib] = avgs[pitch_type][attrib]
-        pitch['prev_type'] = 'FF'
-        (prev_px, prev_pz) = getLocation(prev_zone)
-        pitch['prev_px'] = prev_px
-        pitch['prev_pz'] = prev_pz
-        prediction = reg.predict(scaler.transform(vec.transform(getFeatures(pitch, 6)).toarray()))[0]
-        print pitch_type, zone, ':', prediction
+
+plotpitches("FF", "BR", 6, reg, scaler, vec)
+plotpitches("FF", "BR", 1, reg, scaler, vec)
+plotpitches("FF", "TR", 6, reg, scaler, vec)
+plotpitches("CU", "BR", 6, reg, scaler, vec)
 
 
-prev_zone = 'TR'
-prev_type = 'CU'
-print '--------'
-print 'Previous pitch:', prev_type, prev_zone
-for pitch_type in ["FF", "SL", "CU"]:
-    for zone in ['TL', 'TM', 'TR', 'ML', 'MM', 'MR', 'BL', 'BM', 'BR']:
-        (px, pz) = getLocation(zone)
-        pitch['pitch_type'] = pitch_type
-        pitch['px'] = px
-        pitch['pz'] = pz
-        for attrib in attribs:
-            pitch[attrib] = avgs[pitch_type][attrib]
-        pitch['prev_type'] = 'FF'
-        (prev_px, prev_pz) = getLocation(prev_zone)
-        pitch['prev_px'] = prev_px
-        pitch['prev_pz'] = prev_pz
-        prediction = reg.predict(scaler.transform(vec.transform(getFeatures(pitch, 6)).toarray()))[0]
-        print pitch_type, zone, ':', prediction
+plt.show()
+
+# prev_zone = 'BR'
+# prev_type = 'FF'
+# print '--------'
+# print 'Previous pitch:', prev_type, prev_zone
+# for pitch_type in ["FF", "SL", "CU"]:
+#     for zone in ['TL', 'TM', 'TR', 'ML', 'MM', 'MR', 'BL', 'BM', 'BR']:
+#         (px, pz) = getLocation(zone)
+#         pitch['pitch_type'] = pitch_type
+#         pitch['px'] = px
+#         pitch['pz'] = pz
+#         for attrib in attribs:
+#             pitch[attrib] = avgs[pitch_type][attrib]
+#         pitch['prev_type'] = 'FF'
+#         (prev_px, prev_pz) = getLocation(prev_zone)
+#         pitch['prev_px'] = prev_px
+#         pitch['prev_pz'] = prev_pz
+#         prediction = reg.predict(scaler.transform(vec.transform(getFeatures(pitch, 6)).toarray()))[0]
+#         print pitch_type, zone, ':', prediction
+
+# prev_zone = 'TL'
+# prev_type = 'FF'
+# print '--------'
+# print 'Previous pitch:', prev_type, prev_zone
+# for pitch_type in ["FF", "SL", "CU"]:
+#     for zone in ['TL', 'TM', 'TR', 'ML', 'MM', 'MR', 'BL', 'BM', 'BR']:
+#         (px, pz) = getLocation(zone)
+#         pitch['pitch_type'] = pitch_type
+#         pitch['px'] = px
+#         pitch['pz'] = pz
+#         for attrib in attribs:
+#             pitch[attrib] = avgs[pitch_type][attrib]
+#         pitch['prev_type'] = 'FF'
+#         (prev_px, prev_pz) = getLocation(prev_zone)
+#         pitch['prev_px'] = prev_px
+#         pitch['prev_pz'] = prev_pz
+#         prediction = reg.predict(scaler.transform(vec.transform(getFeatures(pitch, 6)).toarray()))[0]
+#         print pitch_type, zone, ':', prediction
+
+
+# prev_zone = 'BL'
+# prev_type = 'CU'
+# print '--------'
+# print 'Previous pitch:', prev_type, prev_zone
+# for pitch_type in ["FF", "SL", "CU"]:
+#     for zone in ['TL', 'TM', 'TR', 'ML', 'MM', 'MR', 'BL', 'BM', 'BR']:
+#         (px, pz) = getLocation(zone)
+#         pitch['pitch_type'] = pitch_type
+#         pitch['px'] = px
+#         pitch['pz'] = pz
+#         for attrib in attribs:
+#             pitch[attrib] = avgs[pitch_type][attrib]
+#         pitch['prev_type'] = 'FF'
+#         (prev_px, prev_pz) = getLocation(prev_zone)
+#         pitch['prev_px'] = prev_px
+#         pitch['prev_pz'] = prev_pz
+#         prediction = reg.predict(scaler.transform(vec.transform(getFeatures(pitch, 6)).toarray()))[0]
+#         print pitch_type, zone, ':', prediction
+
+
+# prev_zone = 'BR'
+# prev_type = 'SL'
+# print '--------'
+# print 'Previous pitch:', prev_type, prev_zone
+# for pitch_type in ["FF", "SL", "CU"]:
+#     for zone in ['TL', 'TM', 'TR', 'ML', 'MM', 'MR', 'BL', 'BM', 'BR']:
+#         (px, pz) = getLocation(zone)
+#         pitch['pitch_type'] = pitch_type
+#         pitch['px'] = px
+#         pitch['pz'] = pz
+#         for attrib in attribs:
+#             pitch[attrib] = avgs[pitch_type][attrib]
+#         pitch['prev_type'] = 'FF'
+#         (prev_px, prev_pz) = getLocation(prev_zone)
+#         pitch['prev_px'] = prev_px
+#         pitch['prev_pz'] = prev_pz
+#         prediction = reg.predict(scaler.transform(vec.transform(getFeatures(pitch, 6)).toarray()))[0]
+#         print pitch_type, zone, ':', prediction
+
+
+# prev_zone = 'TR'
+# prev_type = 'CU'
+# print '--------'
+# print 'Previous pitch:', prev_type, prev_zone
+# for pitch_type in ["FF", "SL", "CU"]:
+#     for zone in ['TL', 'TM', 'TR', 'ML', 'MM', 'MR', 'BL', 'BM', 'BR']:
+#         (px, pz) = getLocation(zone)
+#         pitch['pitch_type'] = pitch_type
+#         pitch['px'] = px
+#         pitch['pz'] = pz
+#         for attrib in attribs:
+#             pitch[attrib] = avgs[pitch_type][attrib]
+#         pitch['prev_type'] = 'FF'
+#         (prev_px, prev_pz) = getLocation(prev_zone)
+#         pitch['prev_px'] = prev_px
+#         pitch['prev_pz'] = prev_pz
+#         prediction = reg.predict(scaler.transform(vec.transform(getFeatures(pitch, 6)).toarray()))[0]
+#         print pitch_type, zone, ':', prediction
 
 
 
