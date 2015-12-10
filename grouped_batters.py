@@ -74,6 +74,8 @@ def getFeatures(pitch, cluster_num):
     features["break_y"] = pitch["break_y"]
     features["px*pz-mid"] = features["px"] * features["pz-mid"]
     features["px^2*(pz-mid)^2"] = (features["px"] ** 2) * (features["pz-mid"] ** 2)
+    features["break_length/break_y"] = pitch["break_length"] / pitch["break_y"]
+    features["break_length*start_speed"] = pitch["break_length"] * pitch["start_speed"]
 
     if pitch["pitch_type"] == "FF":
         features["FF"] = 1
@@ -83,10 +85,10 @@ def getFeatures(pitch, cluster_num):
         features["CU"] = 1
     else:
         features["CU"] = 0
-    if pitch["pitch_type"] == "CH":
-        features["CH"] = 1
+    if pitch["pitch_type"] == "SL":
+        features["SL"] = 1
     else:
-        features["CH"] = 0
+        features["SL"] = 0
     if pitch["prev_type"] == "FF":
         features["prev_FF"] = 1
     else:
@@ -95,16 +97,16 @@ def getFeatures(pitch, cluster_num):
         features["prev_CU"] = 1
     else:
         features["prev_CU"] = 0
-    if pitch["prev_type"] == "CH":
-        features["prev_CH"] = 1
+    if pitch["prev_type"] == "SL":
+        features["prev_SL"] = 1
     else:
-        features["prev_CH"] = 0
+        features["prev_SL"] = 0
 
     attribs = ["start_speed", "start_speed^2", "px^2", "px", "pfx_x^2", "pfx_x", 
         "pfx_z^2", "pfx_z", "pz-mid", "pz-mid^2", "break_angle", "break_length", "break_y",
-        "px*pz-mid", "px^2*(pz-mid)^2"]
+        "px*pz-mid", "px^2*(pz-mid)^2", "break_length/break_y", "break_length*start_speed"]
     for attrib in attribs:
-        for pitch_type in ["prev_FF", "prev_CU", "prev_CH", "FF", "CU", "CH"]:
+        for pitch_type in ["prev_FF", "prev_CU", "prev_SL", "FF", "CU", "SL"]:
             features[pitch_type + "_" + attrib] = features[pitch_type] * features[attrib]
 
     zones = ['TL', 'TM', 'TR', 'ML', 'MM', 'MR', 'BL', 'BM', 'BR']
@@ -117,6 +119,14 @@ def getFeatures(pitch, cluster_num):
         prev_zone = getZone(pitch['prev_px'], pitch['prev_pz'], pitch['sz_top'], pitch['sz_bot'])
         features['prev_zone_' + prev_zone] = 1
     for zone1 in zones:
+        features[zone1 + '_start_speed'] = features['start_speed']
+        features[zone1 + 'break_length'] = features['break_length']
+        features[zone1 + '_FF'] = features['FF']
+        features[zone1 + '_SL'] = features['SL']
+        features[zone1 + '_CU'] = features['CU']
+        features[zone1 + '_prev=FF'] = features['prev_FF']
+        features[zone1 + '_prev=SL'] = features['prev_SL']
+        features[zone1 + '_prev=CU'] = features['prev_CU']
         for zone2 in zones:
             features[zone1 + '*prev=' + zone2] = features['zone_' + zone1] * features['prev_zone_' + zone2]
     feature_keys = features.keys()
@@ -158,7 +168,7 @@ def train(reg, scaler, num_pitches, vec, players):
     y = []
     num_added = 0
     # for pitch in db.pitches.find({"pitch_type":"FF", "batter":{"$in": batters}}, limit=100000):
-    for pitch in db.pitches.find({"pitch_type":{"$in": ["FF", "CH", "CU"]}, "type":{"$in": ["S", "X"]}}, limit=num_pitches):
+    for pitch in db.pitches.find({"pitch_type":{"$in": ["FF", "SL", "CU"]}, "type":{"$in": ["S", "X"]}}, limit=num_pitches):
         cluster = players.get((pitch['batter'], pitch['year']))
         if cluster == None:
             continue
@@ -186,7 +196,7 @@ def testTrain(reg, scaler, num_pitches, vec, players):
     total_maj_err = 0
     total_maj_err_sq = 0
     # for pitch in db.pitches.find({"pitch_type":"FF", "batter":{"$in": batters}}, limit=100000):
-    for pitch in db.pitches.find({"pitch_type":{"$in": ["FF", "CH", "CU"]}, "type":{"$in": ["S", "X"]}}, limit=num_pitches):
+    for pitch in db.pitches.find({"pitch_type":{"$in": ["FF", "SL", "CU"]}, "type":{"$in": ["S", "X"]}}, limit=num_pitches):
         cluster = players.get((pitch['batter'], pitch['year']))
         if cluster == None:
             continue
@@ -219,7 +229,7 @@ def test(reg, scaler, num_pitches, vec, players):
     total_maj_err = 0
     total_maj_err_sq = 0
     # for pitch in db.pitches.find({"pitch_type":"FF", "batter":{"$in": batters}}, limit=100000, skip=100000):
-    for pitch in db.pitches.find({"pitch_type":{"$in": ["FF", "CH", "CU"]}, "type":{"$in": ["S", "X"]}}, limit=100000, skip=num_pitches):
+    for pitch in db.pitches.find({"pitch_type":{"$in": ["FF", "SL", "CU"]}, "type":{"$in": ["S", "X"]}}, limit=100000, skip=num_pitches):
         cluster = players.get((pitch['batter'], pitch['year']))
         if cluster == None:
             continue
@@ -272,31 +282,6 @@ def classifyWithKmeans(num_clusters):
         print 'cluster %d:' % i, list(kmeans.labels_).count(i)
     return (kmeans, scaler, vec)
 
-# classifications = classifyPlayers()
-# scaler = StandardScaler()
-# reg = SGDRegressor(loss='squared_loss', n_iter=5)
-# regressors = {
-#     'highVol': SGDRegressor(loss='squared_loss', n_iter=5),
-#     'balanced': SGDRegressor(loss='squared_loss', n_iter=5),
-#     'defensive': SGDRegressor(loss='squared_loss', n_iter=5),
-#     'inPlay': SGDRegressor(loss='squared_loss', n_iter=5)
-# }
-# train(regressors, scaler, classifications, reg)
-# test(regressors, scaler, classifications, reg)
-
-# vec = DictVectorizer()
-# scaler = StandardScaler()
-# num_iters = 100
-# reg = SGDRegressor(loss='squared_loss', n_iter=num_iters, verbose=2, penalty='l2', alpha= 0.001, learning_rate="invscaling", eta0=0.002, power_t=0.4)
-# num_pitches = 100000
-# print num_pitches, 'pitches'
-# print 'training with num iters = ', num_iters
-# train(reg, scaler, None, num_pitches, vec)
-# print reg.coef_
-# print json.dumps(vec.inverse_transform([reg.coef_]), sort_keys=True, indent=4)
-# testTrain(reg, scaler, None, num_pitches, vec)
-# test(reg, scaler, None, num_pitches, vec)
-
 
 client = MongoClient('localhost', 27017)
 db = client["pitchfx"]
@@ -312,36 +297,165 @@ vec = DictVectorizer()
 scaler = StandardScaler()
 num_iters = 100
 reg = SGDRegressor(loss='squared_loss', n_iter=num_iters, verbose=2, penalty='l2', alpha= 0.001, learning_rate="invscaling", eta0=0.002, power_t=0.4)
-num_pitches = 300000
+num_pitches = 200000
 print num_pitches, 'pitches'
 print 'training with num iters = ', num_iters
 train(reg, scaler, num_pitches, vec, players)
 print reg.coef_
 print json.dumps(vec.inverse_transform([reg.coef_]), sort_keys=True, indent=4)
+print len(list(reg.coef_)), "total features"
 testTrain(reg, scaler, num_pitches, vec, players)
 test(reg, scaler, num_pitches, vec, players)
 
+# === KERSHAW STUFF ===
 
-# client = MongoClient('localhost', 27017)
-# db = client["pitchfx"]
-# num_clusters = 8
-# (kmeans, scaler) = classifyWithKmeans(8)
-# data = []
-# regs = []
-# scalers = []
-# for i in range(num_clusters):
-#     data.append([])
-#     regs.append(SGDRegressor(loss='squared_loss', n_iter=5))
-#     scalers.append(StandardScaler())
-# for player in db.players.find():
-#     if player.get('h_2014') == None or player.get('h_2014') < 100:
-#         continue
-#     cluster = kmeans.predict(scaler.transform([kmeans_features(player)]))[0]
-#     data[cluster].append(player["player_id"])
-# print "1111111"
-# for i in range(num_clusters):
-#     train(regs[i], scalers[i], data[i])
-#     testTrain(regs[i], scalers[i], data[i])
-#     test(regs[i], scalers[i], data[i])
+kershaw_id = "477132"
+
+avgs = {
+    "FF":{},
+    "SL":{},
+    "CU":{}
+}
+
+def getLocation(zone):
+    sz_top = 3.38
+    sz_bot = 1.5
+    if zone[0] == "T":
+        pz = sz_bot + (sz_top - sz_bot)* 1/6
+    elif zone[0] == "M":
+        pz = sz_bot + (sz_top - sz_bot)* 3/6
+    elif zone[0] == "B":
+        pz = sz_bot + (sz_top - sz_bot)* 1/6
+    else:
+        print 'bad param to getLocation'
+    if zone[1] == "L":
+        px = -0.472
+    elif zone[1] == "M":
+        px = 0
+    elif zone[1] == "R":
+        px = 0.472
+    else:
+        print 'bad param to getLocation'
+    return (px, pz)
+
+
+attribs = ["start_speed", "pfx_x", "pfx_z", "break_angle", "break_length", "break_y"]
+
+for ptype in ["FF", "SL", "CU"]:
+    for attrib in attribs:
+        avgs[ptype][attrib] = 0
+    avgs[ptype]["total"] = 0
+
+for pitch in db.pitches.find({"pitcher": kershaw_id, "pitch_type":{"$in": ["FF", "SL", "CU"]}}):
+    for attrib in attribs:
+        avgs[pitch["pitch_type"]][attrib] += pitch[attrib]
+    avgs[pitch["pitch_type"]]["total"] += 1
+
+for ptype in ["FF", "SL", "CU"]:
+    for attrib in attribs:
+        avgs[ptype][attrib] = avgs[ptype][attrib] / float(avgs[ptype]["total"])
+
+print json.dumps(avgs, indent=4)
+
+# == test ==
+
+prev_zone = 'BR'
+prev_type = 'FF'
+print '--------'
+print 'Previous pitch:', prev_type, prev_zone
+for pitch_type in ["FF", "SL", "CU"]:
+    for zone in ['TL', 'TM', 'TR', 'ML', 'MM', 'MR', 'BL', 'BM', 'BR']:
+        (px, pz) = getLocation(zone)
+        pitch['pitch_type'] = pitch_type
+        pitch['px'] = px
+        pitch['pz'] = pz
+        for attrib in attribs:
+            pitch[attrib] = avgs[pitch_type][attrib]
+        pitch['prev_type'] = 'FF'
+        (prev_px, prev_pz) = getLocation(prev_zone)
+        pitch['prev_px'] = prev_px
+        pitch['prev_pz'] = prev_pz
+        prediction = reg.predict(scaler.transform(vec.transform(getFeatures(pitch, 6)).toarray()))[0]
+        print pitch_type, zone, ':', prediction
+
+prev_zone = 'TL'
+prev_type = 'FF'
+print '--------'
+print 'Previous pitch:', prev_type, prev_zone
+for pitch_type in ["FF", "SL", "CU"]:
+    for zone in ['TL', 'TM', 'TR', 'ML', 'MM', 'MR', 'BL', 'BM', 'BR']:
+        (px, pz) = getLocation(zone)
+        pitch['pitch_type'] = pitch_type
+        pitch['px'] = px
+        pitch['pz'] = pz
+        for attrib in attribs:
+            pitch[attrib] = avgs[pitch_type][attrib]
+        pitch['prev_type'] = 'FF'
+        (prev_px, prev_pz) = getLocation(prev_zone)
+        pitch['prev_px'] = prev_px
+        pitch['prev_pz'] = prev_pz
+        prediction = reg.predict(scaler.transform(vec.transform(getFeatures(pitch, 6)).toarray()))[0]
+        print pitch_type, zone, ':', prediction
+
+
+prev_zone = 'BL'
+prev_type = 'CU'
+print '--------'
+print 'Previous pitch:', prev_type, prev_zone
+for pitch_type in ["FF", "SL", "CU"]:
+    for zone in ['TL', 'TM', 'TR', 'ML', 'MM', 'MR', 'BL', 'BM', 'BR']:
+        (px, pz) = getLocation(zone)
+        pitch['pitch_type'] = pitch_type
+        pitch['px'] = px
+        pitch['pz'] = pz
+        for attrib in attribs:
+            pitch[attrib] = avgs[pitch_type][attrib]
+        pitch['prev_type'] = 'FF'
+        (prev_px, prev_pz) = getLocation(prev_zone)
+        pitch['prev_px'] = prev_px
+        pitch['prev_pz'] = prev_pz
+        prediction = reg.predict(scaler.transform(vec.transform(getFeatures(pitch, 6)).toarray()))[0]
+        print pitch_type, zone, ':', prediction
+
+
+prev_zone = 'BR'
+prev_type = 'SL'
+print '--------'
+print 'Previous pitch:', prev_type, prev_zone
+for pitch_type in ["FF", "SL", "CU"]:
+    for zone in ['TL', 'TM', 'TR', 'ML', 'MM', 'MR', 'BL', 'BM', 'BR']:
+        (px, pz) = getLocation(zone)
+        pitch['pitch_type'] = pitch_type
+        pitch['px'] = px
+        pitch['pz'] = pz
+        for attrib in attribs:
+            pitch[attrib] = avgs[pitch_type][attrib]
+        pitch['prev_type'] = 'FF'
+        (prev_px, prev_pz) = getLocation(prev_zone)
+        pitch['prev_px'] = prev_px
+        pitch['prev_pz'] = prev_pz
+        prediction = reg.predict(scaler.transform(vec.transform(getFeatures(pitch, 6)).toarray()))[0]
+        print pitch_type, zone, ':', prediction
+
+
+prev_zone = 'TR'
+prev_type = 'CU'
+print '--------'
+print 'Previous pitch:', prev_type, prev_zone
+for pitch_type in ["FF", "SL", "CU"]:
+    for zone in ['TL', 'TM', 'TR', 'ML', 'MM', 'MR', 'BL', 'BM', 'BR']:
+        (px, pz) = getLocation(zone)
+        pitch['pitch_type'] = pitch_type
+        pitch['px'] = px
+        pitch['pz'] = pz
+        for attrib in attribs:
+            pitch[attrib] = avgs[pitch_type][attrib]
+        pitch['prev_type'] = 'FF'
+        (prev_px, prev_pz) = getLocation(prev_zone)
+        pitch['prev_px'] = prev_px
+        pitch['prev_pz'] = prev_pz
+        prediction = reg.predict(scaler.transform(vec.transform(getFeatures(pitch, 6)).toarray()))[0]
+        print pitch_type, zone, ':', prediction
+
 
 
