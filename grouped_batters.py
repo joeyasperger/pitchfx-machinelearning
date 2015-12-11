@@ -307,13 +307,13 @@ for player in db.players.find():
 print 'finished mapping players'
 vec = DictVectorizer()
 scaler = StandardScaler()
-num_iters = 200
+num_iters = 100
 reg = SGDRegressor(loss='squared_loss', n_iter=num_iters, verbose=2, penalty='l2', alpha= 0.001, learning_rate="invscaling", eta0=0.002, power_t=0.4)
 num_pitches = 200000
 print num_pitches, 'pitches'
 print 'training with num iters = ', num_iters
 train(reg, scaler, num_pitches, vec, players)
-print reg.coef_
+#print reg.coef_
 print json.dumps(vec.inverse_transform([reg.coef_]), sort_keys=True, indent=4)
 print len(list(reg.coef_)), "total features"
 testTrain(reg, scaler, num_pitches, vec, players)
